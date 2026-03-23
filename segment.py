@@ -189,8 +189,12 @@ def select_gs_for_phys(dataset : ModelParams,
     positive_obj_idx = similarity_nm.argmax(dim=1) >= len(bj_obj_list)
     positive_obj_idx = positive_obj_idx.cpu().numpy()
     # fg_obj_sim = similarity_nm.softmax(dim=1)[:, -len(fg_obj_list):].sum(dim=1)
+    if not np.any(positive_obj_idx):
+        print(bcolors.WARNING + "Text refinement selected zero particles; fallback to bbox-clustered selection." + bcolors.ENDC)
+        positive_obj_idx = np.ones_like(positive_obj_idx, dtype=bool)
 
     # Capture particles inward
+    pre_inward_obj_idx = positive_obj_idx.copy()
     if interactive_viz:
         print(bcolors.WARNING + "Selecting interior of the object. Check if it includes any noises" + bcolors.ENDC)
         input("Press enter to continue")
@@ -218,6 +222,9 @@ def select_gs_for_phys(dataset : ModelParams,
                                                             positive_obj_idx,
                                                             ground_R, ground_T,
                                                             boundary=np.array([inward_selection_eps, inward_selection_eps, inward_selection_eps]))
+    if not np.any(positive_obj_idx):
+        print(bcolors.WARNING + "Inward bbox filtering removed all particles; fallback to pre-inward selection." + bcolors.ENDC)
+        positive_obj_idx = pre_inward_obj_idx.copy()
     
     # Get particles on the periphery of the bbox (that is not close to other surfaces)
     positive_obj_idx = clip_segmeter.knn_infilling(bounded_xyz_np,
@@ -239,9 +246,11 @@ def select_gs_for_phys(dataset : ModelParams,
     positive_obj_idx = ~non_fg_obj_idx
 
     # Final clustering; use 10% as minimum object distance
-    if final_noise_filtering:
+    if final_noise_filtering and np.any(positive_obj_idx):
         guessed_eps = np.mean(bounded_xyz_np.max(axis=0) - bounded_xyz_np.min(axis=0)) / 10
         positive_obj_idx = clip_segmeter.cluster_instance(bounded_xyz_np, positive_obj_idx, eps=guessed_eps)
+    if not np.any(positive_obj_idx):
+        raise RuntimeError("No foreground particles left after post-processing. Try lowering --threshold or setting --inward_bbox_offset 99.")
 
     print("Total segmentation time: ", time.time() - start_cp)
 

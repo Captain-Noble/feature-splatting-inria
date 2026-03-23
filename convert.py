@@ -37,7 +37,7 @@ if not args.skip_matching:
         --image_path " + args.source_path + "/input \
         --ImageReader.single_camera 1 \
         --ImageReader.camera_model " + args.camera + " \
-        --SiftExtraction.use_gpu " + str(use_gpu)
+        --FeatureExtraction.use_gpu " + str(use_gpu)
     exit_code = os.system(feat_extracton_cmd)
     if exit_code != 0:
         logging.error(f"Feature extraction failed with code {exit_code}. Exiting.")
@@ -46,7 +46,7 @@ if not args.skip_matching:
     ## Feature matching
     feat_matching_cmd = colmap_command + " exhaustive_matcher \
         --database_path " + args.source_path + "/distorted/database.db \
-        --SiftMatching.use_gpu " + str(use_gpu)
+        --FeatureMatching.use_gpu " + str(use_gpu)
     exit_code = os.system(feat_matching_cmd)
     if exit_code != 0:
         logging.error(f"Feature matching failed with code {exit_code}. Exiting.")
@@ -65,11 +65,34 @@ if not args.skip_matching:
         logging.error(f"Mapper failed with code {exit_code}. Exiting.")
         exit(exit_code)
 
+def pick_best_sparse_model(sparse_root):
+    model_dirs = []
+    for name in os.listdir(sparse_root):
+        full = os.path.join(sparse_root, name)
+        if os.path.isdir(full):
+            model_dirs.append(full)
+    if not model_dirs:
+        raise RuntimeError(f"No sparse models found under {sparse_root}")
+
+    # Pick the model that likely has the most content.
+    def model_score(model_dir):
+        candidates = ["points3D.bin", "points3D.txt", "images.bin", "images.txt"]
+        score = 0
+        for fn in candidates:
+            p = os.path.join(model_dir, fn)
+            if os.path.exists(p):
+                score += os.path.getsize(p)
+        return score
+
+    return max(model_dirs, key=model_score)
+
+best_sparse_model = pick_best_sparse_model(args.source_path + "/distorted/sparse")
+
 ### Image undistortion
 ## We need to undistort our images into ideal pinhole intrinsics.
 img_undist_cmd = (colmap_command + " image_undistorter \
     --image_path " + args.source_path + "/input \
-    --input_path " + args.source_path + "/distorted/sparse/0 \
+    --input_path " + best_sparse_model + " \
     --output_path " + args.source_path + "\
     --output_type COLMAP")
 exit_code = os.system(img_undist_cmd)

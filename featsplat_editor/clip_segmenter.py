@@ -4,12 +4,29 @@ import numpy as np
 import torch
 from einops import rearrange, einsum
 import maskclip_onnx
+import os
 
 class clip_text_encoder:
     def __init__(self, clip_model_name: str, device: Union[str, torch.device]):
         self.clip_model_name = clip_model_name
         self.device = device
-        self.clip, _ = maskclip_onnx.clip.load(self.clip_model_name, device=self.device)
+
+        # Use a stable local cache directory on Windows/Linux to avoid
+        # literal "$HOME" path issues from upstream default handling.
+        clip_cache_root = os.getenv("TORCH_HUB_ROOT")
+        if clip_cache_root:
+            clip_cache_root = os.path.expandvars(os.path.expanduser(clip_cache_root))
+            if "$HOME" in clip_cache_root:
+                clip_cache_root = clip_cache_root.replace("$HOME", os.path.expanduser("~"))
+        if not clip_cache_root:
+            clip_cache_root = os.path.join(os.path.expanduser("~"), ".cache", "clip")
+        os.makedirs(clip_cache_root, exist_ok=True)
+
+        self.clip, _ = maskclip_onnx.clip.load(
+            self.clip_model_name,
+            device=self.device,
+            download_root=clip_cache_root
+        )
         self.clip.eval()
 
     @torch.no_grad()
@@ -220,6 +237,11 @@ class clip_segmenter:
         from sklearn.cluster import DBSCAN
         if selected_obj_idx is None:
             selected_obj_idx = np.ones(all_xyz_n3.shape[0], dtype=bool)
+        else:
+            selected_obj_idx = selected_obj_idx.astype(bool)
+        if selected_obj_idx.sum() == 0:
+            return selected_obj_idx.copy()
+
         dbscan = DBSCAN(eps=eps, min_samples=min_sample).fit(all_xyz_n3[selected_obj_idx])
         clustered_labels = dbscan.labels_
 
@@ -228,6 +250,8 @@ class clip_segmenter:
         # Filter out -1
         label_count_list = label_count_list[label_idx_list != -1]
         label_idx_list = label_idx_list[label_idx_list != -1]
+        if label_idx_list.shape[0] == 0:
+            return selected_obj_idx.copy()
         max_count_label = label_idx_list[np.argmax(label_count_list)]
 
         clustered_idx = np.zeros_like(selected_obj_idx, dtype=bool)
@@ -242,12 +266,20 @@ class clip_segmenter:
         """
         Select points within a bounding box.
         """
+        selected_obj_idx = selected_obj_idx.astype(bool)
+        if selected_obj_idx.shape[0] != all_xyz_n3.shape[0]:
+            raise ValueError("selected_obj_idx must have the same length as point array")
+        if selected_obj_idx.sum() == 0:
+            return selected_obj_idx.copy()
+
         particles = all_xyz_n3 @ ground_R.T
         particles += ground_T
         xyz_min = np.min(particles[selected_obj_idx], axis=0)
         xyz_max = np.max(particles[selected_obj_idx], axis=0)
         xyz_min += boundary
         xyz_max -= boundary
+        if np.any(xyz_min >= xyz_max):
+            return selected_obj_idx.copy()
         if skip_upwards:
             xyz_max[1] += boundary[1] * 2
         if less_upwards:

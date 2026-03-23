@@ -9,7 +9,7 @@ from gaussian_renderer import GaussianModel
 from utils.system_utils import searchForMaxIteration
 from submodules.mpm_engine.mpm_solver import MPMSolver
 
-def main(dataset, sim_res, infilling_method, material_type, rigid_speed, use_rigidity):
+def main(dataset, sim_res, infilling_method, material_type, rigid_speed, use_rigidity, headless):
     load_iters = searchForMaxIteration(os.path.join(dataset.model_path, "point_cloud"))
 
     gaussians = GaussianModel(dataset.sh_degree, dataset.distill_feature_dim)
@@ -39,13 +39,13 @@ def main(dataset, sim_res, infilling_method, material_type, rigid_speed, use_rig
             if action_dict['action'] == 'physics':
                 obj_dict['actions'][action_idx] = sim_mpm_physics(obj_dict, action_dict,
                                                                   xyz, sim_res, ground_R, ground_T,
-                                                                  infilling_method, material_type, rigid_speed, use_rigidity)
+                                                                  infilling_method, material_type, rigid_speed, use_rigidity, headless)
 
     with open(modifier_dict_pt, "wb") as f:
         pickle.dump(editing_modifier_dict, f)
 
 def sim_mpm_physics(obj_dict, action_dict, xyz, sim_res, ground_R, ground_T,
-                    infilling_method, material_type, rigid_speed, use_rigidity):
+                    infilling_method, material_type, rigid_speed, use_rigidity, headless):
     # constants
     infilling_voxel_res = 128
     GROUND_Y = 0.05
@@ -97,7 +97,7 @@ def sim_mpm_physics(obj_dict, action_dict, xyz, sim_res, ground_R, ground_T,
                                              real_gaussian_particle, rigid_idx, surface_particles, particles)
 
     ti.init(arch=ti.cuda, device_memory_GB=6.0)
-    gui = ti.GUI("Taichi Elements", res=512, background_color=0x112F41)
+    gui = None if headless else ti.GUI("Taichi Elements", res=512, background_color=0x112F41)
 
     mpm = MPMSolver(res=(sim_res, sim_res, sim_res), size=1, max_num_particles=2 ** 21,
                     E_scale=youngs_modulus_scale, poisson_ratio=poisson_ratio, unbounded=True)
@@ -125,8 +125,9 @@ def sim_mpm_physics(obj_dict, action_dict, xyz, sim_res, ground_R, ground_T,
         screen_y = (np_x[:, 1])
         screen_pos = np.stack([screen_x, screen_y], axis=-1)
 
-        gui.circles(screen_pos, radius=2, color=particles_info['color'][:real_gaussian_particle_size])
-        gui.show()
+        if gui is not None:
+            gui.circles(screen_pos, radius=2, color=particles_info['color'][:real_gaussian_particle_size])
+            gui.show()
 
         if frame < 100:
             override_velocity = [0, 0, 0]
@@ -193,6 +194,7 @@ if __name__ == "__main__":
     parser.add_argument("--material_type", default="elastic", choices=["elastic", "snow", "sand"])
     parser.add_argument("--rigid_speed", default=0.0, type=float)
     parser.add_argument("--use_rigidity", default=False, action="store_true")
+    parser.add_argument("--headless", default=False, action="store_true")
     args = get_combined_args(parser)
     print("Simulating physics for " + args.model_path)
 
@@ -207,4 +209,4 @@ if __name__ == "__main__":
     else:
         raise ValueError("Invalid material type: {}".format(args.material_type))
 
-    main(model.extract(args), args.sim_res, args.infilling_method, material_type, args.rigid_speed, args.use_rigidity)
+    main(model.extract(args), args.sim_res, args.infilling_method, material_type, args.rigid_speed, args.use_rigidity, args.headless)
